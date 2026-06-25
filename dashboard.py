@@ -501,17 +501,31 @@ with st.sidebar:
         st.warning("No complete runs found.")
         st.stop()
 
-    run_labels  = [run_label(row) for _, row in df_runs.iterrows()]
+    run_labels = [run_label(row) for _, row in df_runs.iterrows()]
+    run_ids    = df_runs["id"].tolist()
+
+    # Initialise session state with the most recent run (index 0) if not set,
+    # or if the stored run_id no longer exists in the current run list.
+    if "selected_run_id" not in st.session_state or \
+            st.session_state["selected_run_id"] not in run_ids:
+        st.session_state["selected_run_id"] = run_ids[0]
+
+    # Find current position in list for the selectbox default.
+    current_idx = run_ids.index(st.session_state["selected_run_id"])
+
     sel_run_idx = st.selectbox(
         "Select run",
         options=range(len(run_labels)),
         format_func=lambda i: run_labels[i],
-        index=0,
+        index=current_idx,
         label_visibility="collapsed",
     )
 
-    selected_run    = df_runs.iloc[sel_run_idx]
-    selected_run_id = selected_run["id"]
+    # Write back to session state only when the user explicitly changes selection.
+    st.session_state["selected_run_id"] = run_ids[sel_run_idx]
+
+    selected_run_id = st.session_state["selected_run_id"]
+    selected_run    = df_runs[df_runs["id"] == selected_run_id].iloc[0]
     selected_policy = selected_run.get("policy_name") or "Unknown policy"
     selected_dept   = selected_run.get("department_name") or "Unknown department"
 
