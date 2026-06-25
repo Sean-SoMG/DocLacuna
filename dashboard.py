@@ -469,34 +469,29 @@ conn_badge = (
 
 df_runs = load_runs()
 
-# ── Sidebar ────────────────────────────────────────────────────────────────────
+# ── Sidebar — run selector and risk filter (before findings load) ──────────────
 with st.sidebar:
-
-    # ── Run selector ──
     st.markdown("### Run")
 
     if df_runs.empty:
         st.warning("No complete runs found.")
         st.stop()
 
-    # Build label list — index matches df_runs row order (newest first)
-    run_labels = [run_label(row) for _, row in df_runs.iterrows()]
+    run_labels  = [run_label(row) for _, row in df_runs.iterrows()]
     sel_run_idx = st.selectbox(
         "Select run",
         options=range(len(run_labels)),
         format_func=lambda i: run_labels[i],
-        index=0,                  # default: most recent (first in list)
+        index=0,
         label_visibility="collapsed",
     )
 
-    selected_run = df_runs.iloc[sel_run_idx]
+    selected_run      = df_runs.iloc[sel_run_idx]
     selected_run_id   = selected_run["id"]
     selected_policy   = selected_run.get("policy_name") or "Unknown policy"
     selected_dept     = selected_run.get("department_name") or "Unknown department"
 
     st.divider()
-
-    # ── Findings filters ──
     st.markdown("### Filters")
 
     sel_risk = st.multiselect(
@@ -504,11 +499,9 @@ with st.sidebar:
         options=["High", "Medium", "Low"],
         default=["High", "Medium"],
     )
-
     # Type and scope options are populated after findings load (below)
     # Placeholders updated after df_findings is available
-    type_placeholder  = st.empty()
-    scope_placeholder = st.empty()
+    
 
     st.divider()
     if st.button("🔄 Refresh data", use_container_width=True):
@@ -547,10 +540,8 @@ if df_all.empty:
 # Split broken links from regular findings
 is_broken   = df_all["finding_type"] == "broken_link"
 df_findings = df_all[~is_broken].copy()
-df_broken   = df_all[is_broken].copy()
-
-# ── Populate type and scope filters now that data is loaded ───────────────────
-with type_placeholder:
+# ── Sidebar — type and scope filters (after findings load) ────────────────────
+with st.sidebar:
     available_types = sorted(df_findings["finding_type"].dropna().unique().tolist())
     sel_types = st.multiselect(
         "Finding type",
@@ -560,7 +551,6 @@ with type_placeholder:
         key=f"types_{selected_run_id}",
     )
 
-with scope_placeholder:
     available_scopes = sorted(df_findings["comparison_scope"].dropna().unique().tolist())
     sel_scopes = st.multiselect(
         "Scope",
@@ -569,6 +559,20 @@ with scope_placeholder:
         format_func=lambda s: SCOPE_LABELS.get(s, s.replace("_", " ").title()),
         key=f"scopes_{selected_run_id}",
     )
+
+    st.divider()
+    if st.button("🔄 Refresh data", use_container_width=True):
+        st.cache_data.clear()
+        st.rerun()
+
+    st.markdown(
+        "<p style='font-size:0.75rem;color:#9ca3af;margin-top:12px;'>"
+        "Low risk findings are hidden by default. "
+        "Select 'Low' above to include them.</p>",
+        unsafe_allow_html=True,
+    )
+df_broken   = df_all[is_broken].copy()
+
 
 # ── Summary metrics ───────────────────────────────────────────────────────────
 n_high   = (df_findings["risk_level"] == "High").sum()
