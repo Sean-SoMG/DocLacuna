@@ -183,29 +183,43 @@ def get_supabase():
 
 # ── Runs query ─────────────────────────────────────────────────────────────────
 @st.cache_data(ttl=300)
-def load_runs() -> pd.DataFrame:
+def load_findings(run_id: str) -> pd.DataFrame:
     """
-    Fetch all complete runs from policy_coherence.runs, newest first.
-    Returns an empty DataFrame if none found or connection fails.
+    Fetch all findings for a specific run_id from policy_coherence.findings.
+    run_id is part of the cache key, so switching runs fetches fresh data
+    without evicting cached results for other runs.
     """
+    import sys
     client = get_supabase()
     if not client:
+        print("load_findings: no Supabase client available", file=sys.stderr)
         return pd.DataFrame()
     try:
+        print(f"load_findings: querying for run_id={run_id}", file=sys.stderr)
         resp = (
             client
             .schema("policy_coherence")
-            .table("runs")
-            .select("id, department_name, policy_name, status, created_at")
-            .eq("status", "complete")
-            .order("created_at", desc=True)
+            .table("findings")
+            .select(
+                "id, run_id, risk_level, finding_type, comparison_scope, "
+                "finding_text, source_chain, created_at"
+            )
+            .eq("run_id", run_id)
             .execute()
         )
-        if resp.data:
-            return pd.DataFrame(resp.data)
+        if resp.data is None:
+            print(f"load_findings: resp.data is None for run_id={run_id}", file=sys.stderr)
+            return pd.DataFrame()
+        if len(resp.data) == 0:
+            print(f"load_findings: resp.data is empty (0 rows) for run_id={run_id}", file=sys.stderr)
+            return pd.DataFrame()
+        print(f"load_findings: got {len(resp.data)} rows for run_id={run_id}", file=sys.stderr)
+        return _parse_rows(resp.data)
     except Exception as e:
-        st.warning(f"Could not load runs: {e}")
-    return pd.DataFrame()
+        import traceback
+        print(f"load_findings: exception for run_id={run_id}", file=sys.stderr)
+        traceback.print_exc(file=sys.stderr)
+        return pd.DataFrame()
 
 
 def run_label(row) -> str:
@@ -575,7 +589,8 @@ with st.sidebar:
 
     st.divider()
     if st.button("🔄 Refresh data", use_container_width=True):
-        st.cache_data.clear()
+        load_runs.clear()
+        load_findings.clear()
         st.rerun()
 
     st.markdown(
