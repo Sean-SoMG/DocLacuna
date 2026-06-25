@@ -527,15 +527,9 @@ with st.sidebar:
 # ── 3. Load findings for the selected run ─────────────────────────────────────
 df_all = load_findings(selected_run_id)
 
-if df_all.empty:
-    st.markdown("## 🔍 Policy Coherence Tool · IM2026")
-    st.caption("IM2026 · Build a Bureaucrat Bot")
-    st.info("No findings recorded for this run.")
-    st.stop()
-
-is_broken   = df_all["finding_type"] == "broken_link"
-df_findings = df_all[~is_broken].copy()
-df_broken   = df_all[is_broken].copy()
+is_broken   = df_all["finding_type"] == "broken_link" if not df_all.empty else pd.Series(dtype=bool)
+df_findings = df_all[~is_broken].copy() if not df_all.empty else pd.DataFrame()
+df_broken   = df_all[is_broken].copy()  if not df_all.empty else pd.DataFrame()
 
 # ── 4. Sidebar block 2 — type + scope filters + refresh ───────────────────────
 with st.sidebar:
@@ -573,7 +567,6 @@ with st.sidebar:
 # ── 5. Header ─────────────────────────────────────────────────────────────────
 h1, h2 = st.columns([6, 1])
 with h1:
-    # Single line — avoids wrapping on narrower screens
     st.markdown("## 🔍 Policy Coherence Tool · IM2026")
     st.caption("IM2026 · Build a Bureaucrat Bot")
     st.caption(
@@ -585,6 +578,11 @@ with h2:
         f"<div style='padding-top:28px;text-align:right'>{conn_badge}</div>",
         unsafe_allow_html=True,
     )
+
+# ── Guard: no findings for this run ───────────────────────────────────────────
+if df_all.empty:
+    st.info("No findings recorded for this run.")
+    st.stop()
 
 # ── 6. Summary metrics ────────────────────────────────────────────────────────
 n_high   = (df_findings["risk_level"] == "High").sum()
