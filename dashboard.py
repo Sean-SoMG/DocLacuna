@@ -533,7 +533,11 @@ df_broken   = df_all[is_broken].copy()  if not df_all.empty else pd.DataFrame()
 
 # ── 4. Sidebar block 2 — type + scope filters + refresh ───────────────────────
 with st.sidebar:
-    available_types = sorted(df_findings["finding_type"].dropna().unique().tolist())
+    if not df_findings.empty and "finding_type" in df_findings.columns:
+        available_types = sorted(df_findings["finding_type"].dropna().unique().tolist())
+    else:
+        available_types = []
+
     sel_types = st.multiselect(
         "Finding type",
         options=available_types,
@@ -542,7 +546,11 @@ with st.sidebar:
         key=f"types_{selected_run_id}",
     )
 
-    available_scopes = sorted(df_findings["comparison_scope"].dropna().unique().tolist())
+    if not df_findings.empty and "comparison_scope" in df_findings.columns:
+        available_scopes = sorted(df_findings["comparison_scope"].dropna().unique().tolist())
+    else:
+        available_scopes = []
+
     sel_scopes = st.multiselect(
         "Scope",
         options=available_scopes,
