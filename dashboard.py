@@ -204,18 +204,34 @@ def load_runs() -> pd.DataFrame:
         print("load_runs: no client", file=sys.stderr)
         return pd.DataFrame()
     try:
+        # First: get all distinct run_ids that have at least one finding
+        runs_with_findings = (
+            client
+            .schema("policy_coherence")
+            .table("findings")
+            .select("run_id")
+            .execute()
+        )
+        if not runs_with_findings.data:
+            print("load_runs: no findings in database", file=sys.stderr)
+            return pd.DataFrame()
+
+        valid_run_ids = list({row["run_id"] for row in runs_with_findings.data})
+
+        # Second: fetch complete runs and filter to only those with findings
         resp = (
             client
             .schema("policy_coherence")
             .table("runs")
             .select("id, department_name, policy_name, status, created_at")
             .eq("status", "complete")
+            .in_("id", valid_run_ids)
             .order("created_at", desc=True)
             .execute()
         )
         if resp.data:
             return pd.DataFrame(resp.data)
-        print("load_runs: no data returned", file=sys.stderr)
+        print("load_runs: no complete runs with findings", file=sys.stderr)
     except Exception as e:
         import traceback
         print(f"load_runs: {e}", file=sys.stderr)
