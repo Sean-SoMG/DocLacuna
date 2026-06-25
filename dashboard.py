@@ -363,6 +363,19 @@ def _parse_rows(rows: list) -> pd.DataFrame:
     return df
 
 
+# ── Filter helper ──────────────────────────────────────────────────────────────
+def apply_filter(df: pd.DataFrame, column: str, selected: list, all_options: list) -> pd.Series:
+    """
+    Return a boolean mask for df[column].isin(selected).
+    If selected is empty (user cleared all options), treat as 'no filter' —
+    return a mask that passes all rows rather than filtering everything out.
+    This prevents users getting stuck when they accidentally clear a multiselect.
+    """
+    if not selected:
+        return pd.Series(True, index=df.index)
+    return df[column].isin(selected)
+
+
 # ── Rendering helpers ──────────────────────────────────────────────────────────
 def badge(level: str) -> str:
     cls = RISK_COLOURS.get(level, "low")
@@ -459,7 +472,7 @@ def render_finding(row, idx: int):
 
 # ══════════════════════════════════════════════════════════════════════════════
 # APP LAYOUT
-# Script execution order:
+# Execution order:
 #   1. Load runs
 #   2. Sidebar block 1 — run selector + risk filter (no findings needed yet)
 #   3. Load findings for selected run
@@ -515,7 +528,6 @@ with st.sidebar:
 df_all = load_findings(selected_run_id)
 
 if df_all.empty:
-    # Still render the header before stopping so the page isn't blank
     st.markdown("## 🔍 Policy Coherence Tool · IM2026")
     st.caption("IM2026 · Build a Bureaucrat Bot")
     st.info("No findings recorded for this run.")
@@ -553,13 +565,15 @@ with st.sidebar:
     st.markdown(
         "<p style='font-size:0.75rem;color:#9ca3af;margin-top:12px;'>"
         "Low risk findings are hidden by default. "
-        "Select 'Low' above to include them.</p>",
+        "Select 'Low' above to include them. "
+        "Clearing a filter shows all options.</p>",
         unsafe_allow_html=True,
     )
 
 # ── 5. Header ─────────────────────────────────────────────────────────────────
 h1, h2 = st.columns([6, 1])
 with h1:
+    # Single line — avoids wrapping on narrower screens
     st.markdown("## 🔍 Policy Coherence Tool · IM2026")
     st.caption("IM2026 · Build a Bureaucrat Bot")
     st.caption(
@@ -568,7 +582,7 @@ with h1:
     )
 with h2:
     st.markdown(
-        f"<div style='padding-top:18px;text-align:right'>{conn_badge}</div>",
+        f"<div style='padding-top:28px;text-align:right'>{conn_badge}</div>",
         unsafe_allow_html=True,
     )
 
@@ -594,12 +608,11 @@ tab_main, tab_broken = st.tabs([
 
 # ── Main findings tab ─────────────────────────────────────────────────────────
 with tab_main:
-    mask = (
-        df_findings["risk_level"].isin(sel_risk) &
-        df_findings["finding_type"].isin(sel_types) &
-        df_findings["comparison_scope"].isin(sel_scopes)
-    )
-    df_view = df_findings[mask]
+    # Empty selection = no filter applied (show all), not "filter out everything"
+    risk_mask  = apply_filter(df_findings, "risk_level",      sel_risk,   ["High", "Medium", "Low"])
+    type_mask  = apply_filter(df_findings, "finding_type",    sel_types,  available_types)
+    scope_mask = apply_filter(df_findings, "comparison_scope", sel_scopes, available_scopes)
+    df_view    = df_findings[risk_mask & type_mask & scope_mask]
 
     if df_view.empty:
         st.markdown(
