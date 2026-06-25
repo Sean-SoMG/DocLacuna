@@ -325,8 +325,8 @@ def _parse_rows(rows: list) -> pd.DataFrame:
         agency_a = src_a.get("agency", "") or label_a
         agency_b = src_b.get("agency", "") or label_b
 
-        summary_full = _replace_chunk_labels(ft.get("summary", ""),       label_a, label_b)
-        detail       = _replace_chunk_labels(ft.get("detail", ""),        label_a, label_b)
+        summary_full   = _replace_chunk_labels(ft.get("summary", ""),        label_a, label_b)
+        detail         = _replace_chunk_labels(ft.get("detail", ""),         label_a, label_b)
         recommendation = _replace_chunk_labels(ft.get("recommendation", ""), label_a, label_b)
 
         # First sentence (up to 160 chars) as card title; rest as collapsed body
@@ -457,7 +457,18 @@ def render_finding(row, idx: int):
     st.markdown("<div style='margin-bottom:4px'></div>", unsafe_allow_html=True)
 
 
-# ── Load runs ──────────────────────────────────────────────────────────────────
+# ══════════════════════════════════════════════════════════════════════════════
+# APP LAYOUT
+# Script execution order:
+#   1. Load runs
+#   2. Sidebar block 1 — run selector + risk filter (no findings needed yet)
+#   3. Load findings for selected run
+#   4. Sidebar block 2 — type + scope filters + refresh button
+#   5. Header
+#   6. Metrics + tabs + cards
+# ══════════════════════════════════════════════════════════════════════════════
+
+# ── 1. Load runs ──────────────────────────────────────────────────────────────
 connected = get_supabase() is not None
 conn_badge = (
     '<span style="background:#d1fae5;color:#065f46;padding:2px 8px;'
@@ -469,7 +480,7 @@ conn_badge = (
 
 df_runs = load_runs()
 
-# ── Sidebar — run selector and risk filter (before findings load) ──────────────
+# ── 2. Sidebar block 1 — run selector and risk filter ─────────────────────────
 with st.sidebar:
     st.markdown("### Run")
 
@@ -486,10 +497,10 @@ with st.sidebar:
         label_visibility="collapsed",
     )
 
-    selected_run      = df_runs.iloc[sel_run_idx]
-    selected_run_id   = selected_run["id"]
-    selected_policy   = selected_run.get("policy_name") or "Unknown policy"
-    selected_dept     = selected_run.get("department_name") or "Unknown department"
+    selected_run    = df_runs.iloc[sel_run_idx]
+    selected_run_id = selected_run["id"]
+    selected_policy = selected_run.get("policy_name") or "Unknown policy"
+    selected_dept   = selected_run.get("department_name") or "Unknown department"
 
     st.divider()
     st.markdown("### Filters")
@@ -499,48 +510,22 @@ with st.sidebar:
         options=["High", "Medium", "Low"],
         default=["High", "Medium"],
     )
-    # Type and scope options are populated after findings load (below)
-    # Placeholders updated after df_findings is available
-    
 
-    st.divider()
-    if st.button("🔄 Refresh data", use_container_width=True):
-        st.cache_data.clear()
-        st.rerun()
-
-    st.markdown(
-        "<p style='font-size:0.75rem;color:#9ca3af;margin-top:12px;'>"
-        "Low risk findings are hidden by default. "
-        "Select 'Low' above to include them.</p>",
-        unsafe_allow_html=True,
-    )
-
-# ── Load findings for selected run ────────────────────────────────────────────
+# ── 3. Load findings for the selected run ─────────────────────────────────────
 df_all = load_findings(selected_run_id)
 
-# ── Header ────────────────────────────────────────────────────────────────────
-h1, h2 = st.columns([6, 1])
-with h1:
-    st.markdown("## 🔍 Policy Coherence Tool - IM2026")
-    st.caption("IM2026 · Build a Bureaucrat Bot")
-    st.caption(
-        f"{selected_policy} · {selected_dept} · "
-        f"Refreshed {datetime.now().strftime('%d %b %Y %H:%M')}"
-    )
-with h2:
-    st.markdown(
-        f"<div style='padding-top:18px;text-align:right'>{conn_badge}</div>",
-        unsafe_allow_html=True,
-    )
-
 if df_all.empty:
+    # Still render the header before stopping so the page isn't blank
+    st.markdown("## 🔍 Policy Coherence Tool · IM2026")
+    st.caption("IM2026 · Build a Bureaucrat Bot")
     st.info("No findings recorded for this run.")
     st.stop()
 
-# Split broken links from regular findings
 is_broken   = df_all["finding_type"] == "broken_link"
 df_findings = df_all[~is_broken].copy()
-# ── Sidebar — type and scope filters (after findings load) ────────────────────
+df_broken   = df_all[is_broken].copy()
+
+# ── 4. Sidebar block 2 — type + scope filters + refresh ───────────────────────
 with st.sidebar:
     available_types = sorted(df_findings["finding_type"].dropna().unique().tolist())
     sel_types = st.multiselect(
@@ -571,10 +556,23 @@ with st.sidebar:
         "Select 'Low' above to include them.</p>",
         unsafe_allow_html=True,
     )
-df_broken   = df_all[is_broken].copy()
 
+# ── 5. Header ─────────────────────────────────────────────────────────────────
+h1, h2 = st.columns([6, 1])
+with h1:
+    st.markdown("## 🔍 Policy Coherence Tool · IM2026")
+    st.caption("IM2026 · Build a Bureaucrat Bot")
+    st.caption(
+        f"{selected_policy} · {selected_dept} · "
+        f"Refreshed {datetime.now().strftime('%d %b %Y %H:%M')}"
+    )
+with h2:
+    st.markdown(
+        f"<div style='padding-top:18px;text-align:right'>{conn_badge}</div>",
+        unsafe_allow_html=True,
+    )
 
-# ── Summary metrics ───────────────────────────────────────────────────────────
+# ── 6. Summary metrics ────────────────────────────────────────────────────────
 n_high   = (df_findings["risk_level"] == "High").sum()
 n_medium = (df_findings["risk_level"] == "Medium").sum()
 n_low    = (df_findings["risk_level"] == "Low").sum()
