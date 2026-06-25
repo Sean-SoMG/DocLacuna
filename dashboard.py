@@ -1,10 +1,11 @@
 """
-Policy Coherence Dashboard
+Policy Coherence Dashboard — IM2026
 Reads from policy_coherence.runs and policy_coherence.findings in Supabase.
 """
 
 import json
 import os
+import sys
 import streamlit as st
 import pandas as pd
 from datetime import datetime
@@ -20,11 +21,9 @@ st.set_page_config(
 # ── Styles ─────────────────────────────────────────────────────────────────────
 st.markdown("""
 <style>
-/* ── Base ── */
 [data-testid="stAppViewContainer"] { background: #f5f6f8; }
 [data-testid="stSidebar"]          { background: #ffffff; border-right: 1px solid #e2e5ea; }
 
-/* ── Risk badges ── */
 .badge {
     display: inline-block;
     padding: 2px 9px;
@@ -38,7 +37,6 @@ st.markdown("""
 .badge-medium { background: #fef3e2; color: #92400e; border: 1px solid #fbd89c; }
 .badge-low    { background: #e8f0fe; color: #1e40af; border: 1px solid #bfcffa; }
 
-/* ── Type pill ── */
 .type-pill {
     display: inline-block;
     padding: 2px 8px;
@@ -51,7 +49,6 @@ st.markdown("""
     margin-left: 6px;
 }
 
-/* ── Finding cards ── */
 .card {
     background: #ffffff;
     border: 1px solid #e2e5ea;
@@ -64,7 +61,6 @@ st.markdown("""
 .card-medium { border-left-color: #d97706; }
 .card-low    { border-left-color: #3b82f6; }
 
-/* ── Card title ── */
 .card-title {
     font-size: 0.97rem;
     font-weight: 600;
@@ -76,7 +72,6 @@ st.markdown("""
     overflow-wrap: break-word;
 }
 
-/* ── Card summary (collapsed) ── */
 .card-summary {
     font-size: 0.88rem;
     color: #4b5563;
@@ -84,7 +79,6 @@ st.markdown("""
     margin-bottom: 10px;
 }
 
-/* ── Source block ── */
 .source-block {
     font-size: 0.8rem;
     color: #6b7280;
@@ -101,7 +95,6 @@ st.markdown("""
     letter-spacing: 0.05em;
 }
 
-/* ── Excerpt block (expanded) ── */
 .excerpt {
     background: #f8f9fa;
     border-left: 3px solid #d1d5db;
@@ -114,7 +107,6 @@ st.markdown("""
     line-height: 1.5;
 }
 
-/* ── Detail / recommendation sections ── */
 .section-label {
     font-size: 0.7rem;
     font-weight: 700;
@@ -130,19 +122,27 @@ st.markdown("""
     margin: 0 0 4px 0;
 }
 
-/* ── Scope tag ── */
 .scope-tag {
     font-size: 0.73rem;
     color: #6b7280;
     margin-left: 8px;
 }
 
-/* ── Empty state ── */
 .empty-state {
     text-align: center;
     padding: 48px 24px;
     color: #9ca3af;
     font-size: 0.92rem;
+}
+
+.welcome-box {
+    border: 1px solid #e2e5ea;
+    border-radius: 8px;
+    background: #ffffff;
+    padding: 40px 48px;
+    max-width: 620px;
+    margin: 60px auto 0 auto;
+    text-align: center;
 }
 </style>
 """, unsafe_allow_html=True)
@@ -166,36 +166,76 @@ SCOPE_LABELS = {
     "within_agency": "Within agency",
 }
 
+KNOWN_LABELS = {
+    "farm-household-allowance-guidelines-effective-from-1-july-2024": "FHA Guidelines",
+    "fha-program-factsheet":           "FHA Program Factsheet",
+    "fha-assets-test-factsheet":       "FHA Assets Test Factsheet",
+    "fha-income-test-factsheet":       "FHA Income Test Factsheet",
+    "guide-farm-financial-assessment": "Farm Financial Assessment Guide",
+}
 
-# ── Supabase connection ────────────────────────────────────────────────────────
-@st.cache_resource
-def get_supabase():
+DEFAULT_RUN_ID = "05c02529-9e82-4696-b502-90454602a26c"
+
+# Session state keys
+_KEY_LOADED_RUN_ID = "loaded_run_id"   # set ONLY by the View findings button
+_KEY_LOADED_POLICY = "loaded_policy"
+_KEY_LOADED_DEPT   = "loaded_dept"
+_KEY_FINDINGS_DF   = "findings_df"     # cached DataFrame — survives all rerenders
+
+
+# ── Supabase — fresh client per call, never cached ────────────────────────────
+def make_supabase():
     try:
         from supabase import create_client
-        url = st.secrets.get("SUPABASE_URL", os.environ.get("SUPABASE_URL", ""))
-        key = st.secrets.get("SUPABASE_KEY", os.environ.get("SUPABASE_KEY", ""))
+        url = st.secrets.get("SUPABASE_URL", "")
+        key = st.secrets.get("SUPABASE_KEY", "")
         if url and key:
             return create_client(url, key)
-    except Exception:
-        pass
+    except Exception as e:
+        print(f"make_supabase: {e}", file=sys.stderr)
     return None
 
 
-# ── Runs query ─────────────────────────────────────────────────────────────────
+# ── Data loading ───────────────────────────────────────────────────────────────
 @st.cache_data(ttl=300)
-def load_findings(run_id: str) -> pd.DataFrame:
-    """
-    Fetch all findings for a specific run_id from policy_coherence.findings.
-    run_id is part of the cache key, so switching runs fetches fresh data
-    without evicting cached results for other runs.
-    """
-    import sys
-    client = get_supabase()
+def load_runs() -> pd.DataFrame:
+    client = make_supabase()
     if not client:
-        print("load_findings: no Supabase client available", file=sys.stderr)
+        print("load_runs: no client", file=sys.stderr)
         return pd.DataFrame()
     try:
-        print(f"load_findings: querying for run_id={run_id}", file=sys.stderr)
+        resp = (
+            client
+            .schema("policy_coherence")
+            .table("runs")
+            .select("id, department_name, policy_name, status, created_at")
+            .eq("status", "complete")
+            .order("created_at", desc=True)
+            .execute()
+        )
+        if resp.data:
+            return pd.DataFrame(resp.data)
+        print("load_runs: no data returned", file=sys.stderr)
+    except Exception as e:
+        import traceback
+        print(f"load_runs: {e}", file=sys.stderr)
+        traceback.print_exc(file=sys.stderr)
+    return pd.DataFrame()
+
+
+def fetch_findings(run_id: str) -> pd.DataFrame:
+    """
+    Fetch findings from Supabase for a given run_id.
+    NOT decorated with @st.cache_data — called only from the button handler,
+    so caching is managed via st.session_state[_KEY_FINDINGS_DF] instead.
+    This means the call is never triggered by a rerender.
+    """
+    client = make_supabase()
+    if not client:
+        print(f"fetch_findings: no client for run_id={run_id}", file=sys.stderr)
+        return pd.DataFrame()
+    try:
+        print(f"fetch_findings: querying run_id={run_id}", file=sys.stderr)
         resp = (
             client
             .schema("policy_coherence")
@@ -208,68 +248,22 @@ def load_findings(run_id: str) -> pd.DataFrame:
             .execute()
         )
         if resp.data is None:
-            print(f"load_findings: resp.data is None for run_id={run_id}", file=sys.stderr)
+            print(f"fetch_findings: resp.data is None for run_id={run_id}", file=sys.stderr)
             return pd.DataFrame()
         if len(resp.data) == 0:
-            print(f"load_findings: resp.data is empty (0 rows) for run_id={run_id}", file=sys.stderr)
+            print(f"fetch_findings: 0 rows for run_id={run_id}", file=sys.stderr)
             return pd.DataFrame()
-        print(f"load_findings: got {len(resp.data)} rows for run_id={run_id}", file=sys.stderr)
+        print(f"fetch_findings: {len(resp.data)} rows for run_id={run_id}", file=sys.stderr)
         return _parse_rows(resp.data)
     except Exception as e:
         import traceback
-        print(f"load_findings: exception for run_id={run_id}", file=sys.stderr)
+        print(f"fetch_findings: exception for run_id={run_id}: {e}", file=sys.stderr)
         traceback.print_exc(file=sys.stderr)
-        return pd.DataFrame()
-
-
-def run_label(row) -> str:
-    """
-    Build a human-readable dropdown label for a run.
-    Example: "Farm Household Allowance — DAFF (21 Jun 2026)"
-    """
-    policy = row.get("policy_name") or "Unknown policy"
-    dept   = row.get("department_name") or "Unknown department"
-    try:
-        ts = datetime.fromisoformat(str(row.get("created_at", "")).replace("Z", "+00:00"))
-        date_str = ts.strftime("%d %b %Y")
-    except Exception:
-        date_str = "unknown date"
-    return f"{policy} — {dept} ({date_str})"
-
-
-# ── Findings query ─────────────────────────────────────────────────────────────
-@st.cache_data(ttl=300)
-def load_findings(run_id: str) -> pd.DataFrame:
-    """
-    Fetch all findings for a specific run_id from policy_coherence.findings.
-    run_id is part of the cache key, so switching runs fetches fresh data
-    without evicting cached results for other runs.
-    """
-    client = get_supabase()
-    if not client:
-        return pd.DataFrame()
-    try:
-        resp = (
-            client
-            .schema("policy_coherence")
-            .table("findings")
-            .select(
-                "id, run_id, risk_level, finding_type, comparison_scope, "
-                "finding_text, source_chain, created_at"
-            )
-            .eq("run_id", run_id)
-            .execute()
-        )
-        if resp.data:
-            return _parse_rows(resp.data)
-    except Exception as e:
-        st.warning(f"Could not load findings: {e}")
     return pd.DataFrame()
 
 
 # ── Parsing helpers ────────────────────────────────────────────────────────────
 def _safe_json(val, fallback):
-    """Parse a value that may already be a dict, a JSON string, or None."""
     if val is None:
         return fallback
     if isinstance(val, dict):
@@ -281,46 +275,27 @@ def _safe_json(val, fallback):
 
 
 def _label_from_url(url: str) -> str:
-    """
-    Derive a human-readable source label from a URL filename.
-    Known long filenames are mapped to short labels.
-    Falls back to title-cased filename stem, then domain.
-    """
     if not url:
         return ""
-
-    KNOWN = {
-        "farm-household-allowance-guidelines-effective-from-1-july-2024": "FHA Guidelines",
-        "fha-program-factsheet":           "FHA Program Factsheet",
-        "fha-assets-test-factsheet":       "FHA Assets Test Factsheet",
-        "fha-income-test-factsheet":       "FHA Income Test Factsheet",
-        "guide-farm-financial-assessment": "Farm Financial Assessment Guide",
-    }
-
     from urllib.parse import urlparse
     import os as _os
     parsed   = urlparse(url)
     basename = _os.path.basename(parsed.path)
     stem     = _os.path.splitext(basename)[0].lower()
-
-    if stem in KNOWN:
-        return KNOWN[stem]
+    if stem in KNOWN_LABELS:
+        return KNOWN_LABELS[stem]
     if stem:
         return stem.replace("-", " ").replace("_", " ").title()
     return parsed.netloc or url
 
 
-def _replace_chunk_labels(text: str, label_a: str, label_b: str) -> str:
-    """
-    Replace LLM-generated Chunk/Source A/B references with readable
-    labels derived from source URLs.
-    """
-    if label_a:
-        text = text.replace("Chunk A", label_a).replace("chunk A", label_a)
-        text = text.replace("Source A", label_a).replace("source A", label_a)
-    if label_b:
-        text = text.replace("Chunk B", label_b).replace("chunk B", label_b)
-        text = text.replace("Source B", label_b).replace("source B", label_b)
+def _replace_labels(text: str, a: str, b: str) -> str:
+    for find, replace in [
+        ("Chunk A", a), ("chunk A", a), ("Source A", a), ("source A", a),
+        ("Chunk B", b), ("chunk B", b), ("Source B", b), ("source B", b),
+    ]:
+        if replace:
+            text = text.replace(find, replace)
     return text
 
 
@@ -329,27 +304,24 @@ def _parse_rows(rows: list) -> pd.DataFrame:
     for r in rows:
         ft = _safe_json(r.get("finding_text"), {})
         sc = _safe_json(r.get("source_chain"),  {})
+        sa = sc.get("source_a", {})
+        sb = sc.get("source_b", {})
 
-        src_a = sc.get("source_a", {})
-        src_b = sc.get("source_b", {})
+        la = _label_from_url(sa.get("source_url", ""))
+        lb = _label_from_url(sb.get("source_url", ""))
+        aa = sa.get("agency", "") or la
+        ab = sb.get("agency", "") or lb
 
-        # agency field not populated by scraper — derive labels from URLs
-        label_a  = _label_from_url(src_a.get("source_url", ""))
-        label_b  = _label_from_url(src_b.get("source_url", ""))
-        agency_a = src_a.get("agency", "") or label_a
-        agency_b = src_b.get("agency", "") or label_b
+        raw    = _replace_labels(ft.get("summary", ""),        la, lb)
+        detail = _replace_labels(ft.get("detail", ""),         la, lb)
+        rec    = _replace_labels(ft.get("recommendation", ""), la, lb)
 
-        summary_full   = _replace_chunk_labels(ft.get("summary", ""),        label_a, label_b)
-        detail         = _replace_chunk_labels(ft.get("detail", ""),         label_a, label_b)
-        recommendation = _replace_chunk_labels(ft.get("recommendation", ""), label_a, label_b)
-
-        # First sentence (up to 160 chars) as card title; rest as collapsed body
-        dot = summary_full.find(". ")
+        dot = raw.find(". ")
         if dot != -1 and dot < 160:
-            title   = summary_full[:dot + 1].strip()
-            summary = summary_full[dot + 2:].strip()
+            title   = raw[:dot + 1].strip()
+            summary = raw[dot + 2:].strip()
         else:
-            title   = summary_full.strip()
+            title   = raw.strip()
             summary = ""
 
         records.append({
@@ -360,14 +332,13 @@ def _parse_rows(rows: list) -> pd.DataFrame:
             "title":            title,
             "summary":          summary,
             "detail":           detail,
-            "recommendation":   recommendation,
-            "agency_a":         agency_a,
-            "agency_b":         agency_b,
-            "url_a":            src_a.get("source_url", ""),
-            "url_b":            src_b.get("source_url", ""),
-            "excerpt_a":        src_a.get("text_excerpt", ""),
-            "excerpt_b":        src_b.get("text_excerpt", ""),
-            "created_at":       r.get("created_at", ""),
+            "recommendation":   rec,
+            "agency_a":         aa,
+            "agency_b":         ab,
+            "url_a":            sa.get("source_url", ""),
+            "url_b":            sb.get("source_url", ""),
+            "excerpt_a":        sa.get("text_excerpt", ""),
+            "excerpt_b":        sb.get("text_excerpt", ""),
         })
 
     df = pd.DataFrame(records)
@@ -378,16 +349,11 @@ def _parse_rows(rows: list) -> pd.DataFrame:
 
 
 # ── Filter helper ──────────────────────────────────────────────────────────────
-def apply_filter(df: pd.DataFrame, column: str, selected: list, all_options: list) -> pd.Series:
-    """
-    Return a boolean mask for df[column].isin(selected).
-    If selected is empty (user cleared all options), treat as 'no filter' —
-    return a mask that passes all rows rather than filtering everything out.
-    This prevents users getting stuck when they accidentally clear a multiselect.
-    """
+def apply_filter(df: pd.DataFrame, col: str, selected: list) -> pd.Series:
+    """Empty selection = no filter applied (show all rows)."""
     if not selected:
         return pd.Series(True, index=df.index)
-    return df[column].isin(selected)
+    return df[col].isin(selected)
 
 
 # ── Rendering helpers ──────────────────────────────────────────────────────────
@@ -406,14 +372,11 @@ def scope_tag(s: str) -> str:
     return f'<span class="scope-tag">· {label}</span>'
 
 
-def card_css(level: str) -> str:
-    return f'card card-{level.lower()}'
-
-
-def render_url(url: str, label: str) -> str:
+def render_url(url: str) -> str:
     if url:
-        return f'<a href="{url}" target="_blank" style="color:#2563eb;font-size:0.8rem;">{label} ↗</a>'
-    return f'<span style="color:#9ca3af;font-size:0.8rem;">{label} (no URL)</span>'
+        short = url.replace("https://", "").replace("http://", "")
+        return f'<a href="{url}" target="_blank" style="color:#2563eb;font-size:0.8rem;">{short} ↗</a>'
+    return '<span style="color:#9ca3af;font-size:0.8rem;">No URL recorded</span>'
 
 
 def render_finding(row, idx: int):
@@ -423,10 +386,9 @@ def render_finding(row, idx: int):
     if key not in st.session_state:
         st.session_state[key] = False
 
-    # Card header — always visible
     summary_html = f'<p class="card-summary">{row["summary"]}</p>' if row["summary"] else ""
     st.markdown(f"""
-<div class="{card_css(level)}">
+<div class="card card-{level.lower()}">
   <div style="display:flex;align-items:center;gap:4px;margin-bottom:8px;">
     {badge(level)}{type_pill(row['finding_type'])}{scope_tag(row['comparison_scope'])}
   </div>
@@ -435,49 +397,38 @@ def render_finding(row, idx: int):
 </div>
 """, unsafe_allow_html=True)
 
-    # Expand toggle
-    col_toggle, col_spacer = st.columns([1, 8])
-    with col_toggle:
+    col_btn, _ = st.columns([1, 8])
+    with col_btn:
         btn_label = "▲ Less" if st.session_state[key] else "▼ Detail"
         if st.button(btn_label, key=f"btn_{key}", use_container_width=True):
             st.session_state[key] = not st.session_state[key]
             st.rerun()
 
-    # Expanded detail view
     if st.session_state[key]:
         with st.container():
             if row["detail"]:
                 st.markdown('<p class="section-label">Detail</p>', unsafe_allow_html=True)
                 st.markdown(f'<p class="section-body">{row["detail"]}</p>', unsafe_allow_html=True)
-
             if row["recommendation"]:
                 st.markdown('<p class="section-label">Recommendation</p>', unsafe_allow_html=True)
                 st.markdown(f'<p class="section-body">{row["recommendation"]}</p>', unsafe_allow_html=True)
 
-            # Sources
-            src_label_a = row["agency_a"] or "Source A"
-            src_label_b = row["agency_b"] or "Source B"
             st.markdown(
                 '<p class="section-label" style="margin-top:18px;">Sources compared</p>',
                 unsafe_allow_html=True,
             )
             c1, c2 = st.columns(2)
-            with c1:
-                excerpt_html = f"<div class='excerpt'>{row['excerpt_a']}</div>" if row["excerpt_a"] else ""
-                st.markdown(f"""
+            for col, agency, url, excerpt in [
+                (c1, row["agency_a"], row["url_a"], row["excerpt_a"]),
+                (c2, row["agency_b"], row["url_b"], row["excerpt_b"]),
+            ]:
+                with col:
+                    ex_html = f"<div class='excerpt'>{excerpt}</div>" if excerpt else ""
+                    st.markdown(f"""
 <div class="source-block">
-  <span class="source-label">{src_label_a}</span><br>
-  {render_url(row['url_a'], row['url_a'] or 'No URL recorded')}
-  {excerpt_html}
-</div>
-""", unsafe_allow_html=True)
-            with c2:
-                excerpt_html = f"<div class='excerpt'>{row['excerpt_b']}</div>" if row["excerpt_b"] else ""
-                st.markdown(f"""
-<div class="source-block">
-  <span class="source-label">{src_label_b}</span><br>
-  {render_url(row['url_b'], row['url_b'] or 'No URL recorded')}
-  {excerpt_html}
+  <span class="source-label">{agency or 'Unknown'}</span><br>
+  {render_url(url)}
+  {ex_html}
 </div>
 """, unsafe_allow_html=True)
 
@@ -485,143 +436,258 @@ def render_finding(row, idx: int):
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-# APP LAYOUT
-# Execution order:
-#   1. Load runs
-#   2. Sidebar block 1 — run selector + risk filter (no findings needed yet)
-#   3. Load findings for selected run
-#   4. Sidebar block 2 — type + scope filters + refresh button
-#   5. Header
-#   6. Metrics + tabs + cards
+# LAYOUT
+#
+# Architecture: findings are stored in st.session_state[_KEY_FINDINGS_DF]
+# and are ONLY loaded when the user clicks "View findings". Every other
+# rerender (filter changes, expand/collapse, Streamlit's startup double-pass)
+# reads from session state and never calls fetch_findings.
+#
+# Execution order every render:
+#   1. Load runs list (cached, cheap)
+#   2. Render sidebar — mode selector, run selector, search, button, filters
+#   3. If button was just clicked — fetch findings, store in session state
+#   4. Read findings from session state (may be empty on first load)
+#   5. Render header + main content
 # ══════════════════════════════════════════════════════════════════════════════
 
-# ── 1. Load runs ──────────────────────────────────────────────────────────────
-connected = get_supabase() is not None
-conn_badge = (
-    '<span style="background:#d1fae5;color:#065f46;padding:2px 8px;'
-    'border-radius:3px;font-size:0.75rem;font-weight:600;">● Supabase connected</span>'
-    if connected else
-    '<span style="background:#fee2e2;color:#991b1b;padding:2px 8px;'
-    'border-radius:3px;font-size:0.75rem;font-weight:600;">✕ Not connected</span>'
-)
-
+# ── 1. Load runs (cached) ─────────────────────────────────────────────────────
 df_runs = load_runs()
 
-# ── 2. Sidebar block 1 — run selector and risk filter ─────────────────────────
+# ── Connection badge (computed once, used in header) ──────────────────────────
+_connected = make_supabase() is not None
+conn_html  = (
+    '<span style="background:#d1fae5;color:#065f46;padding:2px 8px;border-radius:3px;'
+    'font-size:0.75rem;font-weight:600;">● Supabase connected</span>'
+    if _connected else
+    '<span style="background:#fee2e2;color:#991b1b;padding:2px 8px;border-radius:3px;'
+    'font-size:0.75rem;font-weight:600;">✕ Not connected</span>'
+)
+
+# ── 2. Sidebar ────────────────────────────────────────────────────────────────
 with st.sidebar:
-    st.markdown("### Run")
 
-    if df_runs.empty:
-        st.warning("No complete runs found.")
-        st.stop()
+    st.markdown("## 🔍 Policy Coherence")
+    st.caption("IM2026 · Build a Bureaucrat Bot")
+    st.divider()
 
-    run_labels = [run_label(row) for _, row in df_runs.iterrows()]
-    run_ids    = df_runs["id"].tolist()
-
-    # Initialise session state with the most recent run (index 0) if not set,
-    # or if the stored run_id no longer exists in the current run list.
-    if "selected_run_id" not in st.session_state or \
-            st.session_state["selected_run_id"] not in run_ids:
-        st.session_state["selected_run_id"] = run_ids[0]
-
-    # Find current position in list for the selectbox default.
-    current_idx = run_ids.index(st.session_state["selected_run_id"])
-
-    sel_run_idx = st.selectbox(
-        "Select run",
-        options=range(len(run_labels)),
-        format_func=lambda i: run_labels[i],
-        index=current_idx,
+    # ── Mode selector ──────────────────────────────────────────────────────────
+    st.markdown("### Mode")
+    mode = st.radio(
+        "mode",
+        options=["View existing report", "Run new analysis"],
+        index=0,
         label_visibility="collapsed",
     )
 
-    # Write back to session state only when the user explicitly changes selection.
-    st.session_state["selected_run_id"] = run_ids[sel_run_idx]
-
-    selected_run_id = st.session_state["selected_run_id"]
-    selected_run    = df_runs[df_runs["id"] == selected_run_id].iloc[0]
-    selected_policy = selected_run.get("policy_name") or "Unknown policy"
-    selected_dept   = selected_run.get("department_name") or "Unknown department"
-
     st.divider()
-    st.markdown("### Filters")
 
-    sel_risk = st.multiselect(
-        "Risk level",
-        options=["High", "Medium", "Low"],
-        default=["High", "Medium"],
-    )
+    if mode == "Run new analysis":
+        st.info("New analysis is not yet available in this version. Select 'View existing report' to review findings from a completed run.")
 
-# ── 3. Load findings for the selected run ─────────────────────────────────────
-df_all = load_findings(selected_run_id)
-
-is_broken   = df_all["finding_type"] == "broken_link" if not df_all.empty else pd.Series(dtype=bool)
-df_findings = df_all[~is_broken].copy() if not df_all.empty else pd.DataFrame()
-df_broken   = df_all[is_broken].copy()  if not df_all.empty else pd.DataFrame()
-
-# ── 4. Sidebar block 2 — type + scope filters + refresh ───────────────────────
-with st.sidebar:
-    if not df_findings.empty and "finding_type" in df_findings.columns:
-        available_types = sorted(df_findings["finding_type"].dropna().unique().tolist())
     else:
-        available_types = []
+        # ── View existing report ───────────────────────────────────────────────
+        st.markdown("### Select report")
 
-    sel_types = st.multiselect(
-        "Finding type",
-        options=available_types,
-        default=available_types,
-        format_func=lambda t: TYPE_LABELS.get(t, t.replace("_", " ").title()),
-        key=f"types_{selected_run_id}",
-    )
+        if df_runs.empty:
+            st.warning("No complete runs found in Supabase.")
+        else:
+            # Build run list
+            run_ids    = df_runs["id"].tolist()
+            run_labels = []
+            for _, r in df_runs.iterrows():
+                try:
+                    ts = datetime.fromisoformat(
+                        str(r.get("created_at", "")).replace("Z", "+00:00")
+                    ).strftime("%d %b %Y %H:%M")
+                except Exception:
+                    ts = "?"
+                run_labels.append(
+                    f"{r.get('policy_name', 'Unknown')} — "
+                    f"{r.get('department_name', 'Unknown')} ({ts})"
+                )
 
-    if not df_findings.empty and "comparison_scope" in df_findings.columns:
-        available_scopes = sorted(df_findings["comparison_scope"].dropna().unique().tolist())
-    else:
-        available_scopes = []
+            # Search box to filter the dropdown
+            search = st.text_input(
+                "Search reports",
+                placeholder="Type to filter...",
+                label_visibility="collapsed",
+            )
 
-    sel_scopes = st.multiselect(
-        "Scope",
-        options=available_scopes,
-        default=available_scopes,
-        format_func=lambda s: SCOPE_LABELS.get(s, s.replace("_", " ").title()),
-        key=f"scopes_{selected_run_id}",
-    )
+            # Filter run list by search term
+            if search.strip():
+                term = search.strip().lower()
+                filtered = [
+                    (i, label) for i, label in enumerate(run_labels)
+                    if term in label.lower()
+                ]
+            else:
+                filtered = list(enumerate(run_labels))
 
-    st.divider()
-    if st.button("🔄 Refresh data", use_container_width=True):
-        load_runs.clear()
-        load_findings.clear()
-        st.rerun()
+            if not filtered:
+                st.warning("No reports match your search.")
+                sel_run_id = None
+            else:
+                filtered_indices = [i for i, _ in filtered]
+                filtered_labels  = [label for _, label in filtered]
 
-    st.markdown(
-        "<p style='font-size:0.75rem;color:#9ca3af;margin-top:12px;'>"
-        "Low risk findings are hidden by default. "
-        "Select 'Low' above to include them. "
-        "Clearing a filter shows all options.</p>",
-        unsafe_allow_html=True,
-    )
+                # Pre-select DEFAULT_RUN_ID if it's in the filtered list,
+                # otherwise pre-select the first item.
+                if DEFAULT_RUN_ID in run_ids:
+                    default_pos = run_ids.index(DEFAULT_RUN_ID)
+                    if default_pos in filtered_indices:
+                        dropdown_default = filtered_indices.index(default_pos)
+                    else:
+                        dropdown_default = 0
+                else:
+                    dropdown_default = 0
 
-# ── 5. Header ─────────────────────────────────────────────────────────────────
+                sel_pos = st.selectbox(
+                    "Report",
+                    options=range(len(filtered_labels)),
+                    format_func=lambda i: filtered_labels[i],
+                    index=dropdown_default,
+                    label_visibility="collapsed",
+                )
+                sel_run_id = run_ids[filtered_indices[sel_pos]]
+
+            # View findings button — the ONLY place fetch_findings is called
+            if st.button(
+                "View findings",
+                type="primary",
+                use_container_width=True,
+                disabled=(not filtered or sel_run_id is None),
+            ):
+                with st.spinner("Loading findings..."):
+                    df_fetched = fetch_findings(sel_run_id)
+
+                # Store in session state — this is the commit point.
+                # From here, every rerender reads from session state,
+                # never from the selectbox or fetch_findings.
+                st.session_state[_KEY_FINDINGS_DF]   = df_fetched
+                st.session_state[_KEY_LOADED_RUN_ID] = sel_run_id
+
+                # Store display metadata from the run row
+                run_row = df_runs[df_runs["id"] == sel_run_id].iloc[0]
+                st.session_state[_KEY_LOADED_POLICY] = run_row.get("policy_name") or "Unknown policy"
+                st.session_state[_KEY_LOADED_DEPT]   = run_row.get("department_name") or "Unknown department"
+
+                st.rerun()
+
+        st.divider()
+
+        # ── Filters — only shown when findings are loaded ──────────────────────
+        findings_loaded = _KEY_FINDINGS_DF in st.session_state
+
+        if findings_loaded:
+            st.markdown("### Filters")
+
+            sel_risk = st.multiselect(
+                "Risk level",
+                options=["High", "Medium", "Low"],
+                default=["High", "Medium"],
+            )
+
+            _df_f = st.session_state[_KEY_FINDINGS_DF]
+            _non_broken = _df_f[_df_f["finding_type"] != "broken_link"] if not _df_f.empty else _df_f
+
+            available_types = (
+                sorted(_non_broken["finding_type"].dropna().unique().tolist())
+                if not _non_broken.empty and "finding_type" in _non_broken.columns
+                else []
+            )
+            sel_types = st.multiselect(
+                "Finding type",
+                options=available_types,
+                default=available_types,
+                format_func=lambda t: TYPE_LABELS.get(t, t.replace("_", " ").title()),
+                key=f"types_{st.session_state.get(_KEY_LOADED_RUN_ID, 'none')}",
+            )
+
+            available_scopes = (
+                sorted(_non_broken["comparison_scope"].dropna().unique().tolist())
+                if not _non_broken.empty and "comparison_scope" in _non_broken.columns
+                else []
+            )
+            sel_scopes = st.multiselect(
+                "Scope",
+                options=available_scopes,
+                default=available_scopes,
+                format_func=lambda s: SCOPE_LABELS.get(s, s.replace("_", " ").title()),
+                key=f"scopes_{st.session_state.get(_KEY_LOADED_RUN_ID, 'none')}",
+            )
+
+            st.markdown(
+                "<p style='font-size:0.75rem;color:#9ca3af;margin-top:8px;'>"
+                "Low risk findings hidden by default. "
+                "Clearing any filter shows all options.</p>",
+                unsafe_allow_html=True,
+            )
+        else:
+            # Placeholders so the variables exist for the main content area
+            sel_risk   = ["High", "Medium"]
+            sel_types  = []
+            sel_scopes = []
+
+# ── 3 & 4. Read findings from session state ───────────────────────────────────
+# fetch_findings is NEVER called here. This block executes on every rerender
+# including filter changes and expand/collapse — it only reads, never fetches.
+
+df_all = st.session_state.get(_KEY_FINDINGS_DF, pd.DataFrame())
+
+EMPTY_COLS = [
+    "id", "risk_level", "finding_type", "comparison_scope",
+    "title", "summary", "detail", "recommendation",
+    "agency_a", "agency_b", "url_a", "url_b", "excerpt_a", "excerpt_b",
+]
+
+if df_all.empty:
+    df_findings = pd.DataFrame(columns=EMPTY_COLS)
+    df_broken   = pd.DataFrame(columns=EMPTY_COLS)
+else:
+    is_broken   = df_all["finding_type"] == "broken_link"
+    df_findings = df_all[~is_broken].copy()
+    df_broken   = df_all[is_broken].copy()
+
+findings_loaded   = not df_findings.empty or not df_broken.empty
+selected_policy   = st.session_state.get(_KEY_LOADED_POLICY, "")
+selected_dept     = st.session_state.get(_KEY_LOADED_DEPT, "")
+
+# ── 5. Header ──────────────────────────────────────────────────────────────────
 h1, h2 = st.columns([6, 1])
 with h1:
     st.markdown("## 🔍 Policy Coherence Tool · IM2026")
-    st.caption("IM2026 · Build a Bureaucrat Bot")
-    st.caption(
-        f"{selected_policy} · {selected_dept} · "
-        f"Refreshed {datetime.now().strftime('%d %b %Y %H:%M')}"
-    )
+    if findings_loaded:
+        st.caption("IM2026 · Build a Bureaucrat Bot")
+        st.caption(
+            f"{selected_policy} · {selected_dept} · "
+            f"Refreshed {datetime.now().strftime('%d %b %Y %H:%M')}"
+        )
+    else:
+        st.caption("IM2026 · Build a Bureaucrat Bot")
 with h2:
     st.markdown(
-        f"<div style='padding-top:28px;text-align:right'>{conn_badge}</div>",
+        f"<div style='padding-top:28px;text-align:right'>{conn_html}</div>",
         unsafe_allow_html=True,
     )
 
-# ── Guard: no findings for this run ───────────────────────────────────────────
-if df_all.empty:
-    st.info("No findings recorded for this run.")
+# ── Welcome screen (no findings loaded yet) ───────────────────────────────────
+if not findings_loaded:
+    st.markdown("""
+<div class="welcome-box">
+  <p style="font-size:2rem;margin:0 0 12px 0;">🔍</p>
+  <p style="font-size:1.1rem;font-weight:600;color:#111827;margin:0 0 8px 0;">
+    Select a report to get started
+  </p>
+  <p style="font-size:0.9rem;color:#6b7280;margin:0;">
+    Choose an existing report from the sidebar and click
+    <strong>View findings</strong> to load the analysis.
+  </p>
+</div>
+""", unsafe_allow_html=True)
     st.stop()
 
-# ── 6. Summary metrics ────────────────────────────────────────────────────────
+# ── Metrics ────────────────────────────────────────────────────────────────────
 n_high   = (df_findings["risk_level"] == "High").sum()
 n_medium = (df_findings["risk_level"] == "Medium").sum()
 n_low    = (df_findings["risk_level"] == "Low").sum()
@@ -635,38 +701,39 @@ m4.metric("🔵 Low risk",    n_low)
 
 st.divider()
 
-# ── Tabs ──────────────────────────────────────────────────────────────────────
+# ── Tabs ───────────────────────────────────────────────────────────────────────
 tab_main, tab_broken = st.tabs([
     f"Findings ({n_total})",
     f"Broken Links ({len(df_broken)})",
 ])
 
-# ── Main findings tab ─────────────────────────────────────────────────────────
 with tab_main:
-    # Empty selection = no filter applied (show all), not "filter out everything"
-    risk_mask  = apply_filter(df_findings, "risk_level",      sel_risk,   ["High", "Medium", "Low"])
-    type_mask  = apply_filter(df_findings, "finding_type",    sel_types,  available_types)
-    scope_mask = apply_filter(df_findings, "comparison_scope", sel_scopes, available_scopes)
-    df_view    = df_findings[risk_mask & type_mask & scope_mask]
-
-    if df_view.empty:
-        st.markdown(
-            "<div class='empty-state'>No findings match the selected filters.</div>",
-            unsafe_allow_html=True,
-        )
+    if df_findings.empty:
+        st.info("No findings recorded for this run.")
     else:
-        n_filtered = len(df_view)
-        n_hidden   = n_total - n_filtered
-        caption    = f"**{n_filtered} finding{'s' if n_filtered != 1 else ''}**"
-        if n_hidden > 0:
-            caption += f" · {n_hidden} hidden by filters"
-        st.markdown(caption)
-        st.markdown("")
+        mask = (
+            apply_filter(df_findings, "risk_level",         sel_risk)
+            & apply_filter(df_findings, "finding_type",     sel_types)
+            & apply_filter(df_findings, "comparison_scope", sel_scopes)
+        )
+        df_view = df_findings[mask]
 
-        for i, (_, row) in enumerate(df_view.iterrows()):
-            render_finding(row, i)
+        if df_view.empty:
+            st.markdown(
+                "<div class='empty-state'>No findings match the selected filters.</div>",
+                unsafe_allow_html=True,
+            )
+        else:
+            n_shown  = len(df_view)
+            n_hidden = n_total - n_shown
+            caption  = f"**{n_shown} finding{'s' if n_shown != 1 else ''}**"
+            if n_hidden > 0:
+                caption += f" · {n_hidden} hidden by filters"
+            st.markdown(caption)
+            st.markdown("")
+            for i, (_, row) in enumerate(df_view.iterrows()):
+                render_finding(row, i)
 
-# ── Broken links tab ──────────────────────────────────────────────────────────
 with tab_broken:
     if df_broken.empty:
         st.markdown(
