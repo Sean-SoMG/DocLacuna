@@ -11,7 +11,7 @@ from datetime import datetime
 
 # ── Page config ────────────────────────────────────────────────────────────────
 st.set_page_config(
-    page_title="Policy Coherence Tool",
+    page_title="Policy Coherence Tool · IM2026",
     page_icon="🔍",
     layout="wide",
     initial_sidebar_state="expanded",
@@ -528,7 +528,8 @@ df_all = load_findings(selected_run_id)
 # ── Header ────────────────────────────────────────────────────────────────────
 h1, h2 = st.columns([6, 1])
 with h1:
-    st.markdown("## 🔍 Policy Coherence Tool")
+    st.markdown("## 🔍 Policy Coherence Tool - IM2026")
+    st.caption("IM2026 · Build a Bureaucrat Bot")
     st.caption(
         f"{selected_policy} · {selected_dept} · "
         f"Refreshed {datetime.now().strftime('%d %b %Y %H:%M')}"
