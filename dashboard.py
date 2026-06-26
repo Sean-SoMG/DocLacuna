@@ -665,8 +665,7 @@ with st.sidebar:
                 unsafe_allow_html=True,
             )
         else:
-            # Placeholders so the variables exist for the main content area
-            sel_risk   = ["High", "Medium"]
+            sel_risk   = []
             sel_types  = []
             sel_scopes = []
 
@@ -712,6 +711,22 @@ with h2:
         f"<div style='padding-top:28px;text-align:right'>{conn_html}</div>",
         unsafe_allow_html=True,
     )
+
+# ── Mode gate — nothing below renders for "Run new analysis" ──────────────────
+if mode == "Run new analysis":
+    st.markdown("""
+<div class="welcome-box">
+  <p style="font-size:2rem;margin:0 0 12px 0;">⚙️</p>
+  <p style="font-size:1.1rem;font-weight:600;color:#111827;margin:0 0 8px 0;">
+    New analysis coming soon
+  </p>
+  <p style="font-size:0.9rem;color:#6b7280;margin:0;">
+    This feature is under development. Switch to
+    <strong>View existing report</strong> to review completed findings.
+  </p>
+</div>
+""", unsafe_allow_html=True)
+    st.stop()
 
 # ── Welcome screen (no findings loaded yet) ───────────────────────────────────
 if not findings_loaded:
