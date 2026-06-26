@@ -258,7 +258,8 @@ def fetch_findings(run_id: str) -> pd.DataFrame:
             .table("findings")
             .select(
                 "id, run_id, risk_level, finding_type, comparison_scope, "
-                "finding_text, source_chain, created_at"
+                "finding_text, source_chain, pass3_outcome, "
+                "jurisdiction_a, jurisdiction_b, created_at"
             )
             .eq("run_id", run_id)
             .execute()
@@ -355,6 +356,9 @@ def _parse_rows(rows: list) -> pd.DataFrame:
             "url_b":            sb.get("source_url", ""),
             "excerpt_a":        sa.get("text_excerpt", ""),
             "excerpt_b":        sb.get("text_excerpt", ""),
+            "pass3_outcome":    r.get("pass3_outcome", ""),
+            "jurisdiction_a":   r.get("jurisdiction_a", ""),
+            "jurisdiction_b":   r.get("jurisdiction_b", ""),
         })
 
     df = pd.DataFrame(records)
@@ -387,6 +391,27 @@ def scope_tag(s: str) -> str:
     label = SCOPE_LABELS.get(s, s.replace("_", " ").title())
     return f'<span class="scope-tag">· {label}</span>'
 
+def pass3_pill(outcome: str) -> str:
+    if not outcome or outcome == "skipped":
+        return ""
+    label = outcome.replace("_", " ").title()
+    return (
+        f'<span style="display:inline-block;padding:2px 8px;border-radius:3px;'
+        f'font-size:0.73rem;font-weight:500;background:#eef0f3;color:#4b5563;'
+        f'border:1px solid #d1d5db;margin-left:6px;">P3: {label}</span>'
+    )
+
+
+def jurisdiction_tag(ja: str, jb: str) -> str:
+    values = [v.strip() for v in [ja, jb] if v and v.strip()]
+    if not values:
+        return ""
+    unique = list(dict.fromkeys(values))
+    label  = " · ".join(unique)
+    return (
+        f'<span style="font-size:0.73rem;color:#9ca3af;margin-left:8px;">'
+        f'{label}</span>'
+    )
 
 def render_url(url: str) -> str:
     if url:
@@ -405,8 +430,8 @@ def render_finding(row, idx: int):
     summary_html = f'<p class="card-summary">{row["summary"]}</p>' if row["summary"] else ""
     st.markdown(f"""
 <div class="card card-{level.lower()}">
-  <div style="display:flex;align-items:center;gap:4px;margin-bottom:8px;">
-    {badge(level)}{type_pill(row['finding_type'])}{scope_tag(row['comparison_scope'])}
+  <div style="display:flex;align-items:center;gap:4px;margin-bottom:8px;flex-wrap:wrap;">
+    {badge(level)}{type_pill(row['finding_type'])}{pass3_pill(row.get('pass3_outcome',''))}{jurisdiction_tag(row.get('jurisdiction_a',''), row.get('jurisdiction_b',''))}{scope_tag(row['comparison_scope'])}
   </div>
   <p class="card-title">{row['title']}</p>
   {summary_html}
@@ -600,7 +625,7 @@ with st.sidebar:
 
             sel_risk = st.multiselect(
                 "Risk level",
-                options=["High", "Medium", "Low"],
+                options=["High", "Medium", "Low", "Dismissed"],
                 default=["High", "Medium"],
             )
 
@@ -655,6 +680,7 @@ EMPTY_COLS = [
     "id", "risk_level", "finding_type", "comparison_scope",
     "title", "summary", "detail", "recommendation",
     "agency_a", "agency_b", "url_a", "url_b", "excerpt_a", "excerpt_b",
+    "pass3_outcome", "jurisdiction_a", "jurisdiction_b",
 ]
 
 if df_all.empty:
