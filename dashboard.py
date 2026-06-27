@@ -12,7 +12,7 @@ from datetime import datetime
 
 # ── Page config ────────────────────────────────────────────────────────────────
 st.set_page_config(
-    page_title="Policy Coherence Tool · IM2026",
+    page_title="Doc Lacuna · IM2026",
     page_icon="🔍",
     layout="wide",
     initial_sidebar_state="expanded",
@@ -223,7 +223,7 @@ def load_runs() -> pd.DataFrame:
             client
             .schema("policy_coherence")
             .table("runs")
-            .select("id, department_name, policy_name, status, created_at")
+            .select("id, department_name, policy_name, status, created_at, total_cost_usd")
             .eq("status", "complete")
             .in_("id", valid_run_ids)
             .order("created_at", desc=True)
@@ -374,6 +374,18 @@ def apply_filter(df: pd.DataFrame, col: str, selected: list) -> pd.Series:
     if not selected:
         return pd.Series(True, index=df.index)
     return df[col].isin(selected)
+
+
+def apply_jurisdiction_filter(df: pd.DataFrame, selected: list) -> pd.Series:
+    """
+    A finding passes if jurisdiction_a OR jurisdiction_b is in the selected list.
+    Empty selection = no filter (show all).
+    """
+    if not selected:
+        return pd.Series(True, index=df.index)
+    mask_a = df["jurisdiction_a"].isin(selected)
+    mask_b = df["jurisdiction_b"].isin(selected)
+    return mask_a | mask_b
 
 
 # ── Rendering helpers ──────────────────────────────────────────────────────────
@@ -535,6 +547,8 @@ with st.sidebar:
         else:
             # Build run list
             run_ids    = df_runs["id"].tolist()
+            AUD_RATE = 1.6
+
             run_labels = []
             for _, r in df_runs.iterrows():
                 try:
@@ -543,9 +557,22 @@ with st.sidebar:
                     ).strftime("%d %b %Y %H:%M")
                 except Exception:
                     ts = "?"
+
+                cost = r.get("total_cost_usd")
+                try:
+                    cost = float(cost)
+                except (TypeError, ValueError):
+                    cost = None
+
+                if cost:
+                    aud = cost * AUD_RATE
+                    cost_str = f" — USD ${cost:.2f} (~AUD ${aud:.2f})"
+                else:
+                    cost_str = ""
+
                 run_labels.append(
                     f"{r.get('policy_name', 'Unknown')} — "
-                    f"{r.get('department_name', 'Unknown')} ({ts})"
+                    f"{r.get('department_name', 'Unknown')} ({ts}){cost_str}"
                 )
 
             # Search box to filter the dropdown
@@ -658,6 +685,19 @@ with st.sidebar:
                 key=f"scopes_{st.session_state.get(_KEY_LOADED_RUN_ID, 'none')}",
             )
 
+            available_jurisdictions = sorted(set(
+                _non_broken["jurisdiction_a"].dropna().tolist() +
+                _non_broken["jurisdiction_b"].dropna().tolist()
+            )) if not _non_broken.empty else []
+            available_jurisdictions = [j for j in available_jurisdictions if j.strip()]
+
+            sel_jurisdictions = st.multiselect(
+                "Jurisdiction",
+                options=available_jurisdictions,
+                default=available_jurisdictions,
+                key=f"jurisdictions_{st.session_state.get(_KEY_LOADED_RUN_ID, 'none')}",
+            )
+
             st.markdown(
                 "<p style='font-size:0.75rem;color:#9ca3af;margin-top:8px;'>"
                 "Low risk findings hidden by default. "
@@ -665,9 +705,10 @@ with st.sidebar:
                 unsafe_allow_html=True,
             )
         else:
-            sel_risk   = []
-            sel_types  = []
-            sel_scopes = []
+            sel_risk          = []
+            sel_types         = []
+            sel_scopes        = []
+            sel_jurisdictions = []
 
 # ── 3 & 4. Read findings from session state ───────────────────────────────────
 # fetch_findings is NEVER called here. This block executes on every rerender
@@ -697,15 +738,15 @@ selected_dept     = st.session_state.get(_KEY_LOADED_DEPT, "")
 # ── 5. Header ──────────────────────────────────────────────────────────────────
 h1, h2 = st.columns([6, 1])
 with h1:
-    st.markdown("## 🔍 Policy Coherence Tool · IM2026")
+    st.markdown("## 🔍 Doc Lacuna · IM2026")
+    st.caption("AI coherence check for APS websites and policy documents")
+    st.caption("IM2026 · Build a Bureaucrat Bot")
     if findings_loaded:
-        st.caption("IM2026 · Build a Bureaucrat Bot")
         st.caption(
             f"{selected_policy} · {selected_dept} · "
             f"Refreshed {datetime.now().strftime('%d %b %Y %H:%M')}"
         )
-    else:
-        st.caption("IM2026 · Build a Bureaucrat Bot")
+    
 with h2:
     st.markdown(
         f"<div style='padding-top:28px;text-align:right'>{conn_html}</div>",
@@ -772,6 +813,7 @@ with tab_main:
             apply_filter(df_findings, "risk_level",         sel_risk)
             & apply_filter(df_findings, "finding_type",     sel_types)
             & apply_filter(df_findings, "comparison_scope", sel_scopes)
+            & apply_jurisdiction_filter(df_findings,        sel_jurisdictions)
         )
         df_view = df_findings[mask]
 
