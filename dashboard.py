@@ -262,6 +262,7 @@ def fetch_findings(run_id: str) -> pd.DataFrame:
                 "jurisdiction_a, jurisdiction_b, created_at"
             )
             .eq("run_id", run_id)
+            .eq("is_duplicate", False)
             .execute()
         )
         if resp.data is None:
