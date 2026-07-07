@@ -790,7 +790,7 @@ if not findings_loaded:
 n_high   = (df_findings["risk_level"] == "High").sum()
 n_medium = (df_findings["risk_level"] == "Medium").sum()
 n_low    = (df_findings["risk_level"] == "Low").sum()
-n_total  = len(df_findings)
+n_total  = int(df_findings["risk_level"].isin(["High", "Medium", "Low"]).sum())
 
 m1, m2, m3, m4 = st.columns(4)
 m1.metric("Total findings", n_total)
