@@ -236,7 +236,7 @@ def load_runs() -> pd.DataFrame:
             .select("id, department_name, policy_name, status, created_at, total_cost_usd")
             .eq("status", "complete")
             .in_("id", valid_run_ids)
-            .order("created_at", desc=True)
+            .order("created_at", desc=False)
             .execute()
         )
         if resp.data:
