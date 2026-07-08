@@ -57,9 +57,10 @@ st.markdown("""
     margin-bottom: 10px;
     border-left-width: 4px;
 }
-.card-high   { border-left-color: #dc2626; }
-.card-medium { border-left-color: #d97706; }
-.card-low    { border-left-color: #3b82f6; }
+.card-high          { border-left-color: #dc2626; }
+.card-medium        { border-left-color: #d97706; }
+.card-low           { border-left-color: #3b82f6; }
+.card-collaboration { border-left-color: #0d9488; }
 
 .card-title {
     font-size: 0.97rem;
@@ -153,12 +154,21 @@ RISK_ORDER   = {"High": 0, "Medium": 1, "Low": 2}
 RISK_COLOURS = {"High": "high", "Medium": "medium", "Low": "low"}
 
 TYPE_LABELS = {
-    "contradiction":  "Contradiction",
-    "omission":       "Omission",
-    "terminology":    "Terminology",
-    "structural_gap": "Structural Gap",
-    "broken_link":    "Broken Link",
-    "stale_data":     "Stale Data",
+    "contradiction":             "Contradiction",
+    "omission":                  "Omission",
+    "terminology":               "Terminology",
+    "structural_gap":            "Structural Gap",
+    "broken_link":               "Broken Link",
+    "stale_data":                "Stale Data",
+    "synergy_opportunity":       "Synergy Opportunity",
+    "referral_gap":              "Referral Gap",
+    "packaging_guidance_absent": "Packaging Gap",
+}
+
+COLLABORATION_TYPES = {
+    "synergy_opportunity",
+    "referral_gap",
+    "packaging_guidance_absent",
 }
 
 SCOPE_LABELS = {
@@ -397,6 +407,12 @@ def badge(level: str) -> str:
 
 def type_pill(t: str) -> str:
     label = TYPE_LABELS.get(t, t.replace("_", " ").title())
+    if t in COLLABORATION_TYPES:
+        return (
+            f'<span style="display:inline-block;padding:2px 8px;border-radius:3px;'
+            f'font-size:0.73rem;font-weight:500;background:#ccfbf1;color:#0f766e;'
+            f'border:1px solid #99f6e4;margin-left:6px;">🤝 {label}</span>'
+        )
     return f'<span class="type-pill">{label}</span>'
 
 
@@ -442,7 +458,7 @@ def render_finding(row, idx: int):
 
     summary_html = f'<p class="card-summary">{row["summary"]}</p>' if row["summary"] else ""
     st.markdown(f"""
-<div class="card card-{level.lower()}">
+<div class="card {'card-collaboration' if row.get('finding_type','') in COLLABORATION_TYPES else f'card-{level.lower()}'}">
   <div style="display:flex;align-items:center;gap:4px;margin-bottom:8px;flex-wrap:wrap;">
     {badge(level)}{type_pill(row['finding_type'])}{pass3_pill(row.get('pass3_outcome',''))}{jurisdiction_tag(row.get('jurisdiction_a',''), row.get('jurisdiction_b',''))}{scope_tag(row['comparison_scope'])}
   </div>
@@ -797,6 +813,20 @@ m1.metric("Total findings", n_total)
 m2.metric("🔴 High risk",   n_high)
 m3.metric("🟠 Medium risk", n_medium)
 m4.metric("🔵 Low risk",    n_low)
+
+# Cost display — read from the loaded run row
+_loaded_run_id = st.session_state.get(_KEY_LOADED_RUN_ID)
+if _loaded_run_id is not None and not df_runs.empty:
+    _run_row = df_runs[df_runs["id"] == _loaded_run_id]
+    if not _run_row.empty:
+        _cost = _run_row.iloc[0].get("total_cost_usd")
+        try:
+            _cost = float(_cost)
+        except (TypeError, ValueError):
+            _cost = None
+        if _cost:
+            _aud = _cost * 1.6
+            st.caption(f"Analysis cost: USD ${_cost:.2f} (~AUD ${_aud:.2f})")
 
 st.divider()
 
